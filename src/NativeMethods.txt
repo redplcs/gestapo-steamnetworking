@@ -1,0 +1,13 @@
+﻿LoadLibrary
+GetModuleHandle
+GetProcAddress
+VirtualProtect
+WSABUF
+SOCKADDR_IN
+SOCKET
+HRESULT
+DirectInput8Create
+WSASendTo
+WSARecvFrom
+WSAGetOverlappedResult
+ExitProcess

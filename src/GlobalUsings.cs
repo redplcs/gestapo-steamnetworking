@@ -1,0 +1,1 @@
+﻿global using static Gestapo.SteamNetworking.Hooking.NativeDelegates;
