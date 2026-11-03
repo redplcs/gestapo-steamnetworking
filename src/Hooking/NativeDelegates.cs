@@ -6,6 +6,7 @@ namespace Gestapo.SteamNetworking.Hooking;
 
 // Signatures of the exports we hook, written by hand because CsWin32 can't generate them.
 // Each delegate is named after its export, so nameof() gives the entry point.
+#pragma warning disable CS8981 // lowercase names come from the exports
 internal static unsafe class NativeDelegates
 {
     // kernel32.dll
@@ -46,4 +47,16 @@ internal static unsafe class NativeDelegates
         uint* lpcbTransfer,
         BOOL fWait,
         uint* lpdwFlags);
+
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    internal delegate int bind(SOCKET s, SOCKADDR* name, int namelen);
+
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    internal delegate int getsockname(SOCKET s, SOCKADDR* name, int* namelen);
+
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    internal delegate int closesocket(SOCKET s);
+
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    internal delegate HOSTENT* gethostbyname(PCSTR name);
 }

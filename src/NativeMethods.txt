@@ -11,3 +11,13 @@ WSASendTo
 WSARecvFrom
 WSAGetOverlappedResult
 ExitProcess
+bind
+getsockname
+closesocket
+gethostbyname
+gethostname
+WSASetLastError
+WSA_ERROR
+SOCKET_ERROR
+HOSTENT
+WSASetEvent

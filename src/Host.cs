@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Windows.Win32;
 using Gestapo.SteamNetworking.Hooking;
+using Gestapo.SteamNetworking.Sockets;
 using Gestapo.SteamNetworking.Steam;
 
 namespace Gestapo.SteamNetworking;
@@ -40,6 +41,9 @@ internal static class Host
 
         try
         {
+            var transport = new LoopbackTransport();
+            s_services.Push(transport);
+            s_services.Push(new VirtualSockets(transport));
             s_services.Push(new SteamManager());
         }
         catch (Exception e)
