@@ -15,6 +15,13 @@ internal sealed unsafe class SteamTransport : ITransport
     private const int SendFlags =
         Constants.k_nSteamNetworkingSend_UnreliableNoNagle | Constants.k_nSteamNetworkingSend_AutoRestartBrokenSession;
 
+    // Keeps a session open with every peer: Steam needs over a second to open one, longer than the
+    // game's LAN search waits for replies. Sessions that stay idle for a few minutes are closed.
+    private const int KeepaliveInterval = 10_000;
+
+    // Shorter than any packet header, so the receiving VirtualSockets drops it.
+    private static readonly byte[] s_keepalive = [0];
+
     private readonly ConcurrentDictionary<uint, CSteamID> _peers = new();
     private readonly Callback<SteamNetworkingMessagesSessionRequest_t> _sessionRequest;
     private readonly Callback<SteamNetworkingMessagesSessionFailed_t> _sessionFailed;
@@ -103,12 +110,23 @@ internal sealed unsafe class SteamTransport : ITransport
     private void Pump()
     {
         var messages = new nint[64];
+        var keepaliveDue = 0L;
 
         while (!_closed)
         {
             try
             {
                 SteamAPI.RunCallbacks();
+
+                if (Environment.TickCount64 >= keepaliveDue)
+                {
+                    keepaliveDue = Environment.TickCount64 + KeepaliveInterval;
+
+                    foreach (var peer in FindPeers())
+                    {
+                        SendTo(peer, s_keepalive);
+                    }
+                }
 
                 int count;
 
