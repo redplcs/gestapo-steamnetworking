@@ -9,21 +9,13 @@ internal sealed class SteamManager : IDisposable
     // SteamTransport runs the callbacks: they must come from a single thread.
     internal SteamManager()
     {
-        EnsureAppIdExists();
+        // Replaces steam_appid.txt, which would land in VirtualStore when the game is in Program Files.
+        Environment.SetEnvironmentVariable("SteamAppId", s_appId.ToString());
 
         if (SteamAPI.InitEx(out var msg) != ESteamAPIInitResult.k_ESteamAPIInitResult_OK)
         {
             throw new InvalidOperationException(msg);
         }
-    }
-
-    private static void EnsureAppIdExists()
-    {
-        const string fileName = "steam_appid.txt";
-
-        if (File.Exists(fileName)) return;
-        
-        File.WriteAllText(fileName, s_appId.ToString());
     }
 
     void IDisposable.Dispose()
