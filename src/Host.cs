@@ -41,10 +41,21 @@ internal static class Host
 
         try
         {
-            var transport = new LoopbackTransport();
+            ITransport transport;
+
+            // Loopback runs several game instances on one machine, for testing without a second account.
+            if (Environment.GetEnvironmentVariable("GESTAPO_TRANSPORT") == "loopback")
+            {
+                transport = new LoopbackTransport();
+            }
+            else
+            {
+                s_services.Push(new SteamManager());
+                transport = new SteamTransport();
+            }
+
             s_services.Push(transport);
             s_services.Push(new VirtualSockets(transport));
-            s_services.Push(new SteamManager());
         }
         catch (Exception e)
         {

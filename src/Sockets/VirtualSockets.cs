@@ -25,14 +25,14 @@ internal sealed unsafe class VirtualSockets : IDisposable
     private const nint StatusPending = 0x103;
     private const nint StatusCancelled = unchecked((int)0xC0000120);
 
-    private readonly LoopbackTransport _transport;
+    private readonly ITransport _transport;
     private readonly List<IDisposable> _hooks = [];
     private readonly Dictionary<SOCKET, VirtualSocket> _sockets = [];
     private readonly Lock _lock = new();
     private readonly HostEntry* _host;
     private ushort _nextPort = 49152;
 
-    internal VirtualSockets(LoopbackTransport transport)
+    internal VirtualSockets(ITransport transport)
     {
         // Never freed: the game may keep the pointer, and Winsock's own hostent lives as long.
         _host = (HostEntry*)NativeMemory.AllocZeroed((nuint)sizeof(HostEntry));

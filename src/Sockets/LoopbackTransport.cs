@@ -5,8 +5,7 @@ namespace Gestapo.SteamNetworking.Sockets;
 
 // Carries packets between game instances on this machine over UDP on 127.0.0.1, so the virtual
 // network can be tested without Steam. Instance N listens on BasePort + N and owns 10.0.0.N.
-// Addresses are uints in network byte order, as in sockaddr_in.
-internal sealed class LoopbackTransport : IDisposable
+internal sealed class LoopbackTransport : ITransport
 {
     private const int BasePort = 47000;
     private const int MaxInstances = 8;
@@ -75,9 +74,9 @@ internal sealed class LoopbackTransport : IDisposable
         }
     }
 
-    internal event Action<uint, ReadOnlySpan<byte>>? Received;
+    public event Action<uint, ReadOnlySpan<byte>>? Received;
 
-    internal uint Address { get; }
+    public uint Address { get; }
 
     public void Dispose()
     {
@@ -85,7 +84,7 @@ internal sealed class LoopbackTransport : IDisposable
         _socket.Dispose();
     }
 
-    internal void Send(uint to, ReadOnlySpan<byte> packet)
+    public void Send(uint to, ReadOnlySpan<byte> packet)
     {
         if (to == Broadcast)
         {
