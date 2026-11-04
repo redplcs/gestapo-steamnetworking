@@ -159,13 +159,14 @@ internal sealed unsafe class SteamTransport : ITransport
         }
     }
 
-    // Only friends who run the mod may open a session, see IsPeer.
+    // Any friend may open a session, not only peers: Steam hides the rich presence of an Invisible
+    // friend, who can still find a peer's game and join it.
     private void OnSessionRequest(SteamNetworkingMessagesSessionRequest_t request)
     {
         var identity = request.m_identityRemote;
         var peer = identity.GetSteamID();
 
-        if (!IsPeer(peer))
+        if (!IsFriend(peer))
         {
             Logger.WriteLine($"steam transport: rejected a session from {peer}");
             return;
@@ -199,9 +200,11 @@ internal sealed unsafe class SteamTransport : ITransport
         return peers;
     }
 
+    private static bool IsFriend(CSteamID id) =>
+        SteamFriends.GetFriendRelationship(id) == EFriendRelationship.k_EFriendRelationshipFriend;
+
     private static bool IsPeer(CSteamID id) =>
-        SteamFriends.GetFriendRelationship(id) == EFriendRelationship.k_EFriendRelationshipFriend
-        && SteamFriends.GetFriendRichPresence(id, PresenceKey) == "1";
+        IsFriend(id) && SteamFriends.GetFriendRichPresence(id, PresenceKey) == "1";
 
     // 10.x.y.z in network byte order.
     private static uint AddressOf(CSteamID id)
