@@ -21,6 +21,9 @@ internal sealed unsafe class VirtualSockets : IDisposable
     private const int HeaderSize = 4;
     private const int MaxQueued = 256;
 
+    // LANSessionDiscovery's port, g_nLANDiscoveryPort in the game.
+    private const ushort DiscoveryPort = 9100;
+
     // NTSTATUS values the real provider leaves in OVERLAPPED.Internal.
     private const nint StatusPending = 0x103;
     private const nint StatusCancelled = unchecked((int)0xC0000120);
@@ -190,6 +193,12 @@ internal sealed unsafe class VirtualSockets : IDisposable
         MemoryMarshal.Write(packet, socket.Address.sin_port);
         MemoryMarshal.Write(packet.AsSpan(2), to->sin_port);
         data.CopyTo(packet.AsSpan(HeaderSize));
+
+        if (IsDiscovery(socket.Address.sin_port, to->sin_port))
+        {
+            Logger.WriteLine($"discovery send :{Port(socket.Address.sin_port)} -> {ToEndPoint(*to)}, {data.Length} bytes");
+        }
+
         _transport.Send(to->sin_addr.S_un.S_addr, packet);
 
         if (lpNumberOfBytesSent is not null)
@@ -296,10 +305,16 @@ internal sealed unsafe class VirtualSockets : IDisposable
         var datagram = new Datagram(from, MemoryMarshal.Read<ushort>(packet), packet[HeaderSize..].ToArray());
         var port = MemoryMarshal.Read<ushort>(packet[2..]);
 
+        if (IsDiscovery(datagram.FromPort, port))
+        {
+            Logger.WriteLine($"discovery recv {ToEndPoint(from, datagram.FromPort)} -> :{Port(port)}, {datagram.Data.Length} bytes");
+        }
+
         lock (_lock)
         {
             if (FindByPort(port) is not { } socket)
             {
+                Logger.WriteLine($"drop {ToEndPoint(from, datagram.FromPort)} -> :{Port(port)}: no socket");
                 return;
             }
 
@@ -312,8 +327,16 @@ internal sealed unsafe class VirtualSockets : IDisposable
             {
                 socket.Queue.Enqueue(datagram);
             }
+            else
+            {
+                Logger.WriteLine($"drop {ToEndPoint(from, datagram.FromPort)} -> :{Port(port)}: queue full");
+            }
         }
     }
+
+    // Discovery only: the game's own traffic would flood the log.
+    private static bool IsDiscovery(ushort sourcePort, ushort destinationPort) =>
+        Port(sourcePort) == DiscoveryPort || Port(destinationPort) == DiscoveryPort;
 
     // ponytail: a datagram longer than the buffer is truncated without WSAEMSGSIZE
     private static int Fill(PendingReceive receive, Datagram datagram)
@@ -376,8 +399,11 @@ internal sealed unsafe class VirtualSockets : IDisposable
             && Ascii.EqualsIgnoreCase(name.AsSpan(), MemoryMarshal.CreateReadOnlySpanFromNullTerminated(own));
     }
 
-    private static IPEndPoint ToEndPoint(SOCKADDR_IN address) =>
-        new(new IPAddress(address.sin_addr.S_un.S_addr), BinaryPrimitives.ReverseEndianness(address.sin_port));
+    private static ushort Port(ushort networkOrder) => BinaryPrimitives.ReverseEndianness(networkOrder);
+
+    private static IPEndPoint ToEndPoint(uint address, ushort port) => new(new IPAddress(address), Port(port));
+
+    private static IPEndPoint ToEndPoint(SOCKADDR_IN address) => ToEndPoint(address.sin_addr.S_un.S_addr, address.sin_port);
 
     private sealed class VirtualSocket
     {
