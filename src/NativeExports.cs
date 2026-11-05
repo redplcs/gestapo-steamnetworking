@@ -13,6 +13,7 @@ internal static unsafe class NativeExports
     [UnmanagedCallersOnly(EntryPoint = nameof(DirectInput8Create), CallConvs = [typeof(CallConvStdcall)])]
     internal static HRESULT DirectInput8Create(HINSTANCE hinst, uint dwVersion, Guid* riidltf, void** ppvOut, IUnknown* punkOuter)
     {
+        Host.Start();
         return PInvoke.DirectInput8Create(hinst, dwVersion, riidltf, ppvOut, punkOuter);
     }
 }

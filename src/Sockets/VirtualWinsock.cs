@@ -10,15 +10,18 @@ using Windows.Win32.Networking.WinSock;
 namespace Gestapo.SteamNetworking.Sockets;
 
 // Moves the game's UDP sockets onto a virtual network. Real sockets are bound to an OS-assigned port
-// and never do I/O: sends go to the transport, receives are completed from it, with the same
+// and never do I/O: sends go to the network adapter, receives are completed from it, with the same
 // overlapped semantics the game sees from Winsock. gethostbyname of our own host name returns only
 // the virtual address, which is what peers find in our station URLs.
-internal sealed unsafe class VirtualSockets : IDisposable
+// These hooks cover all the game's network calls: its other ws2_32 imports work as they are on the
+// real socket and events, and it imports nothing for TCP, so every socket here is UDP.
+internal sealed class VirtualWinsock : IDisposable
 {
     private const string Library = "ws2_32.dll";
 
-    // Each transport packet starts with the source and destination ports, in network byte order.
+    // Each adapter packet starts with the source and destination ports, in network byte order.
     private const int HeaderSize = 4;
+    private const int MaxStackPacket = 2048;
     private const int MaxQueued = 256;
 
     // LANSessionDiscovery's port, g_nLANDiscoveryPort in the game.
@@ -28,28 +31,17 @@ internal sealed unsafe class VirtualSockets : IDisposable
     private const nint StatusPending = 0x103;
     private const nint StatusCancelled = unchecked((int)0xC0000120);
 
-    private readonly ITransport _transport;
+    private readonly INetworkAdapter _adapter;
     private readonly List<IDisposable> _hooks = [];
     private readonly Dictionary<SOCKET, VirtualSocket> _sockets = [];
     private readonly Lock _lock = new();
-    private readonly HostEntry* _host;
+    private readonly unsafe HostEntry* _host;
     private ushort _nextPort = 49152;
 
-    internal VirtualSockets(ITransport transport)
+    internal unsafe VirtualWinsock(INetworkAdapter adapter)
     {
-        // Never freed: the game may keep the pointer, and Winsock's own hostent lives as long.
-        _host = (HostEntry*)NativeMemory.AllocZeroed((nuint)sizeof(HostEntry));
-        _host->Entry.h_name = new PSTR((byte*)&_host->Name);
-        _host->Entry.h_aliases = &_host->NoAliases;
-        _host->Entry.h_addrtype = (short)ADDRESS_FAMILY.AF_INET;
-        _host->Entry.h_length = sizeof(uint);
-        _host->Entry.h_addr_list = &_host->Address0;
-        _host->Address0 = (sbyte*)&_host->Address;
-        _host->Address1 = null;
-        _host->Address = transport.Address;
-
-        _transport = transport;
-        _transport.Received += Deliver;
+        _adapter = adapter;
+        _host = HostEntry.Allocate(adapter.Address);
 
         try
         {
@@ -66,19 +58,21 @@ internal sealed unsafe class VirtualSockets : IDisposable
             Dispose();
             throw;
         }
+
+        Task.Run(ReceiveAsync);
     }
 
     public void Dispose()
     {
-        _transport.Received -= Deliver;
-
         foreach (var hook in _hooks)
         {
             hook.Dispose();
         }
+
+        _adapter.Dispose();
     }
 
-    private int Bind(SOCKET s, SOCKADDR* name, int namelen)
+    private unsafe int Bind(SOCKET s, SOCKADDR* name, int namelen)
     {
         if (namelen < sizeof(SOCKADDR_IN) || name->sa_family != ADDRESS_FAMILY.AF_INET)
         {
@@ -108,20 +102,13 @@ internal sealed unsafe class VirtualSockets : IDisposable
             _sockets[s] = new VirtualSocket { Address = requested };
         }
 
-        Logger.WriteLine($"bind {s}: {ToEndPoint(requested)}");
+        Log.Information("Bound socket {Socket} to {EndPoint}", s, ToEndPoint(requested));
         return 0;
     }
 
-    private int GetSockName(SOCKET s, SOCKADDR* name, int* namelen)
+    private unsafe int GetSockName(SOCKET s, SOCKADDR* name, int* namelen)
     {
-        VirtualSocket? socket;
-
-        lock (_lock)
-        {
-            _sockets.TryGetValue(s, out socket);
-        }
-
-        if (socket is null)
+        if (FindSocket(s) is not { } socket)
         {
             return PInvoke.getsockname(s, name, namelen);
         }
@@ -137,7 +124,7 @@ internal sealed unsafe class VirtualSockets : IDisposable
         return 0;
     }
 
-    private int CloseSocket(SOCKET s)
+    private unsafe int CloseSocket(SOCKET s)
     {
         lock (_lock)
         {
@@ -151,19 +138,19 @@ internal sealed unsafe class VirtualSockets : IDisposable
         return PInvoke.closesocket(s);
     }
 
-    private HOSTENT* GetHostByName(PCSTR name)
+    private unsafe HOSTENT* GetHostByName(PCSTR name)
     {
         if (!IsOwnHostName(name))
         {
             return PInvoke.gethostbyname(name);
         }
 
-        Logger.WriteLine($"gethostbyname {name}: {new IPAddress(_host->Address)}");
+        Log.Information("Resolved own host name {Name} to {Address}", name, _adapter.Address);
         return &_host->Entry;
     }
 
     // The game passes one buffer and an event-based OVERLAPPED, without a completion routine.
-    private int SendTo(
+    private unsafe int SendTo(
         SOCKET s,
         WSABUF* lpBuffers,
         uint dwBufferCount,
@@ -174,12 +161,7 @@ internal sealed unsafe class VirtualSockets : IDisposable
         NativeOverlapped* lpOverlapped,
         delegate* unmanaged[Stdcall]<uint, uint, NativeOverlapped*, uint, void> lpCompletionRoutine)
     {
-        VirtualSocket? socket;
-
-        lock (_lock)
-        {
-            _sockets.TryGetValue(s, out socket);
-        }
+        var socket = FindSocket(s);
 
         if (socket is null || lpTo is null || iTolen < sizeof(SOCKADDR_IN))
         {
@@ -188,18 +170,19 @@ internal sealed unsafe class VirtualSockets : IDisposable
 
         var to = (SOCKADDR_IN*)lpTo;
         var data = new ReadOnlySpan<byte>(lpBuffers->buf.Value, (int)lpBuffers->len);
-        var packet = new byte[HeaderSize + data.Length];
+        var length = HeaderSize + data.Length;
+        Span<byte> packet = length <= MaxStackPacket ? stackalloc byte[length] : new byte[length];
 
         MemoryMarshal.Write(packet, socket.Address.sin_port);
-        MemoryMarshal.Write(packet.AsSpan(2), to->sin_port);
-        data.CopyTo(packet.AsSpan(HeaderSize));
+        MemoryMarshal.Write(packet[2..], to->sin_port);
+        data.CopyTo(packet[HeaderSize..]);
 
         if (IsDiscovery(socket.Address.sin_port, to->sin_port))
         {
-            Logger.WriteLine($"discovery send :{Port(socket.Address.sin_port)} -> {ToEndPoint(*to)}, {data.Length} bytes");
+            Log.Debug("Sent {Length} discovery bytes from port {Port} to {To}", data.Length, Port(socket.Address.sin_port), ToEndPoint(*to));
         }
 
-        _transport.Send(to->sin_addr.S_un.S_addr, packet);
+        _adapter.Send(new IPAddress(to->sin_addr.S_un.S_addr), packet);
 
         if (lpNumberOfBytesSent is not null)
         {
@@ -210,7 +193,7 @@ internal sealed unsafe class VirtualSockets : IDisposable
         return 0;
     }
 
-    private int RecvFrom(
+    private unsafe int RecvFrom(
         SOCKET s,
         WSABUF* lpBuffers,
         uint dwBufferCount,
@@ -268,7 +251,7 @@ internal sealed unsafe class VirtualSockets : IDisposable
     }
 
     // ponytail: fWait is ignored, the game only asks after the request's event fired
-    private BOOL GetOverlappedResult(SOCKET s, NativeOverlapped* lpOverlapped, uint* lpcbTransfer, BOOL fWait, uint* lpdwFlags)
+    private unsafe BOOL GetOverlappedResult(SOCKET s, NativeOverlapped* lpOverlapped, uint* lpcbTransfer, BOOL fWait, uint* lpdwFlags)
     {
         nint status;
 
@@ -294,27 +277,42 @@ internal sealed unsafe class VirtualSockets : IDisposable
         return false;
     }
 
-    // Runs on the transport's thread.
-    private void Deliver(uint from, ReadOnlySpan<byte> packet)
+    private async Task ReceiveAsync()
     {
-        if (packet.Length < HeaderSize)
+        await foreach (var packet in _adapter.ReceiveAllAsync())
+        {
+            try
+            {
+                Deliver(packet);
+            }
+            catch (Exception e)
+            {
+                Log.Error(e, "Delivering a packet from {From} failed", packet.From);
+            }
+        }
+    }
+
+    private unsafe void Deliver(Packet packet)
+    {
+        if (packet.Data.Length < HeaderSize)
         {
             return;
         }
 
-        var datagram = new Datagram(from, MemoryMarshal.Read<ushort>(packet), packet[HeaderSize..].ToArray());
-        var port = MemoryMarshal.Read<ushort>(packet[2..]);
+        var header = packet.Data.Span;
+        var datagram = new Datagram(packet.From, MemoryMarshal.Read<ushort>(header), packet.Data[HeaderSize..]);
+        var port = MemoryMarshal.Read<ushort>(header[2..]);
 
         if (IsDiscovery(datagram.FromPort, port))
         {
-            Logger.WriteLine($"discovery recv {ToEndPoint(from, datagram.FromPort)} -> :{Port(port)}, {datagram.Data.Length} bytes");
+            Log.Debug("Received {Length} discovery bytes from {From} on port {Port}", datagram.Data.Length, ToEndPoint(datagram.From, datagram.FromPort), Port(port));
         }
 
         lock (_lock)
         {
             if (FindByPort(port) is not { } socket)
             {
-                Logger.WriteLine($"drop {ToEndPoint(from, datagram.FromPort)} -> :{Port(port)}: no socket");
+                Log.Debug("Dropped a packet from {From} to port {Port}: no socket is bound", ToEndPoint(datagram.From, datagram.FromPort), Port(port));
                 return;
             }
 
@@ -329,7 +327,7 @@ internal sealed unsafe class VirtualSockets : IDisposable
             }
             else
             {
-                Logger.WriteLine($"drop {ToEndPoint(from, datagram.FromPort)} -> :{Port(port)}: queue full");
+                Log.Debug("Dropped a packet from {From} to port {Port}: the receive queue is full", ToEndPoint(datagram.From, datagram.FromPort), Port(port));
             }
         }
     }
@@ -338,26 +336,24 @@ internal sealed unsafe class VirtualSockets : IDisposable
     private static bool IsDiscovery(ushort sourcePort, ushort destinationPort) =>
         Port(sourcePort) == DiscoveryPort || Port(destinationPort) == DiscoveryPort;
 
-    // ponytail: a datagram longer than the buffer is truncated without WSAEMSGSIZE
-    private static int Fill(PendingReceive receive, Datagram datagram)
+    private static unsafe int Fill(PendingReceive receive, Datagram datagram)
     {
         var length = Math.Min(datagram.Data.Length, (int)receive.Buffer.len);
-        datagram.Data.AsSpan(0, length).CopyTo(new Span<byte>(receive.Buffer.buf.Value, length));
+        datagram.Data.Span[..length].CopyTo(new Span<byte>(receive.Buffer.buf.Value, length));
 
-        if (receive.From is not null && receive.FromLength is not null && *receive.FromLength >= sizeof(SOCKADDR_IN))
-        {
-            var from = (SOCKADDR_IN*)receive.From;
-            *from = default;
-            from->sin_family = ADDRESS_FAMILY.AF_INET;
-            from->sin_port = datagram.FromPort;
-            from->sin_addr.S_un.S_addr = datagram.From;
-            *receive.FromLength = sizeof(SOCKADDR_IN);
-        }
+        if (receive.From is null || receive.FromLength is null || *receive.FromLength < sizeof(SOCKADDR_IN)) return length;
+        
+        var from = (SOCKADDR_IN*)receive.From;
+        *from = default;
+        from->sin_family = ADDRESS_FAMILY.AF_INET;
+        from->sin_port = datagram.FromPort;
+        datagram.From.TryWriteBytes(new Span<byte>(&from->sin_addr, sizeof(IN_ADDR)), out _);
+        *receive.FromLength = sizeof(SOCKADDR_IN);
 
         return length;
     }
 
-    private static void Complete(NativeOverlapped* overlapped, nint status, int transferred)
+    private static unsafe void Complete(NativeOverlapped* overlapped, nint status, int transferred)
     {
         if (overlapped is null)
         {
@@ -367,6 +363,14 @@ internal sealed unsafe class VirtualSockets : IDisposable
         overlapped->InternalLow = status;
         overlapped->InternalHigh = transferred;
         PInvoke.WSASetEvent(new WSAEVENT(overlapped->EventHandle));
+    }
+
+    private VirtualSocket? FindSocket(SOCKET s)
+    {
+        lock (_lock)
+        {
+            return _sockets.GetValueOrDefault(s);
+        }
     }
 
     private VirtualSocket? FindByPort(ushort port) => _sockets.Values.FirstOrDefault(v => v.Address.sin_port == port);
@@ -386,7 +390,7 @@ internal sealed unsafe class VirtualSockets : IDisposable
     }
 
     // NULL and "" mean the local host too, see the gethostbyname docs.
-    private static bool IsOwnHostName(PCSTR name)
+    private static unsafe bool IsOwnHostName(PCSTR name)
     {
         if (name.Value is null || *name.Value == 0)
         {
@@ -401,9 +405,9 @@ internal sealed unsafe class VirtualSockets : IDisposable
 
     private static ushort Port(ushort networkOrder) => BinaryPrimitives.ReverseEndianness(networkOrder);
 
-    private static IPEndPoint ToEndPoint(uint address, ushort port) => new(new IPAddress(address), Port(port));
+    private static IPEndPoint ToEndPoint(IPAddress address, ushort port) => new(address, Port(port));
 
-    private static IPEndPoint ToEndPoint(SOCKADDR_IN address) => ToEndPoint(address.sin_addr.S_un.S_addr, address.sin_port);
+    private static IPEndPoint ToEndPoint(SOCKADDR_IN address) => ToEndPoint(new IPAddress(address.sin_addr.S_un.S_addr), address.sin_port);
 
     private sealed class VirtualSocket
     {
@@ -412,9 +416,9 @@ internal sealed unsafe class VirtualSockets : IDisposable
         public readonly Queue<Datagram> Queue = new();
     }
 
-    private readonly record struct Datagram(uint From, ushort FromPort, byte[] Data);
+    private readonly record struct Datagram(IPAddress From, ushort FromPort, ReadOnlyMemory<byte> Data);
 
-    private struct PendingReceive
+    private unsafe struct PendingReceive
     {
         public WSABUF Buffer;
         public SOCKADDR* From;
@@ -423,7 +427,7 @@ internal sealed unsafe class VirtualSockets : IDisposable
     }
 
     // One block, so the pointers inside the hostent stay valid.
-    private struct HostEntry
+    private unsafe struct HostEntry
     {
         public HOSTENT Entry;
         public sbyte* NoAliases;
@@ -431,5 +435,20 @@ internal sealed unsafe class VirtualSockets : IDisposable
         public sbyte* Address1;
         public uint Address;
         public sbyte Name;
+
+        // Never freed: the game may keep the pointer, and Winsock's own hostent lives as long.
+        public static HostEntry* Allocate(IPAddress address)
+        {
+            var host = (HostEntry*)NativeMemory.AllocZeroed((nuint)sizeof(HostEntry));
+            host->Entry.h_name = new PSTR((byte*)&host->Name);
+            host->Entry.h_aliases = &host->NoAliases;
+            host->Entry.h_addrtype = (short)ADDRESS_FAMILY.AF_INET;
+            host->Entry.h_length = sizeof(uint);
+            host->Entry.h_addr_list = &host->Address0;
+            host->Address0 = (sbyte*)&host->Address;
+            host->Address1 = null;
+            address.TryWriteBytes(new Span<byte>(&host->Address, sizeof(uint)), out _);
+            return host;
+        }
     }
 }

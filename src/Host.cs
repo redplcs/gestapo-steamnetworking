@@ -1,4 +1,4 @@
-using System.Runtime.CompilerServices;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using Windows.Win32;
 using Gestapo.SteamNetworking.Hooking;
@@ -9,29 +9,23 @@ namespace Gestapo.SteamNetworking;
 
 internal static class Host
 {
-    private static readonly Stack<IDisposable> s_services = new();
-    
-    // ReSharper disable once UnusedMember.Local
-    private static readonly FunctionHook<ExitProcess> s_exitProcess = new("kernel32.dll", nameof(ExitProcess), static code =>
-    {
-        while (s_services.TryPop(out var service))
-        {
-            try
-            {
-                service.Dispose();
-            }
-            catch (Exception e)
-            {
-                Logger.WriteLine($"Failed to dispose service: {e}");
-            }
-        }
-        
-        PInvoke.ExitProcess(code);
-    });
+    private static bool s_started;
 
-    [ModuleInitializer]
+    // Static: the game calls our hooks through these objects' delegates, GC must not collect them.
+    // ReSharper disable once NotAccessedField.Local
+    private static FunctionHook<ExitProcess>? s_exit;
+    private static VirtualWinsock? s_winsock;
+
     internal static void Start()
     {
+        if (s_started)
+        {
+            return;
+        }
+
+        s_started = true;
+
+        // The game loaded us as dinput8.dll, so a plain "dinput8.dll" would resolve to us, not the real one.
         NativeLibrary.SetDllImportResolver(
             typeof(Host).Assembly,
             static (name, _, _) =>
@@ -39,32 +33,43 @@ internal static class Host
                     ? NativeLibrary.Load(Path.Combine(Environment.SystemDirectory, "dinput8.dll"))
                     : nint.Zero);
 
+        // One file per game launch. Two instances started within the same second share it.
+        Log.Logger = new LoggerConfiguration()
+            .MinimumLevel.Debug()
+            .WriteTo.File(Path.Combine(AppContext.BaseDirectory, $"steamnet-{DateTime.Now:yyyyMMdd-HHmmss}.log"), shared: true)
+            .CreateLogger();
+
+        Log.Information("Starting the mod {Version}", typeof(Host).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion);
+
         try
         {
-            ITransport transport;
-
-            // Loopback runs several game instances on one machine, for testing without a second account.
-            if (Environment.GetEnvironmentVariable("GESTAPO_TRANSPORT") == "loopback")
-            {
-                transport = new LoopbackTransport();
-            }
-            else
-            {
-                s_services.Push(new SteamManager());
-                transport = new SteamTransport();
-            }
-
-            s_services.Push(transport);
-            s_services.Push(new VirtualSockets(transport));
+            s_exit = new FunctionHook<ExitProcess>("kernel32.dll", nameof(ExitProcess), Stop);
+            s_winsock = new VirtualWinsock(Environment.GetEnvironmentVariable("GESTAPO_TRANSPORT") == "loopback"
+                ? new LoopbackAdapter()
+                : new SteamAdapter());
         }
         catch (Exception e)
         {
-            Logger.WriteLine($"{e}");
+            Log.Fatal(e, "The mod failed to start, the game runs without it");
         }
     }
 
-    public static TService GetService<TService>() where TService : IDisposable
+    private static void Stop(uint exitCode)
     {
-        return s_services.OfType<TService>().Single();
+        Log.Information("The game is exiting with code {ExitCode}", exitCode);
+
+        try
+        {
+            s_winsock?.Dispose();
+        }
+        catch (Exception e)
+        {
+            Log.Error(e, "The mod failed to stop");
+        }
+        finally
+        {
+            Log.CloseAndFlush();
+            PInvoke.ExitProcess(exitCode);
+        }
     }
 }

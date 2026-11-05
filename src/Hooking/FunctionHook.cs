@@ -36,13 +36,13 @@ internal sealed class FunctionHook<TDelegate> : IDisposable where TDelegate : De
 
         var trunk = (FARPROC)Marshal.GetFunctionPointerForDelegate(hook);
         Write(trunk);
-        Logger.WriteLine($"{this} hooked: slot=0x{_slot:x} original={_original} hook={trunk}");
+        Log.Information("Hooked {Hook} in IAT slot 0x{Slot:x}: {Original} -> {Trunk}", this, _slot, _original, trunk);
     }
 
     public void Dispose()
     {
         Write(_original);
-        Logger.WriteLine($"{this} unhooked: slot=0x{_slot:x} restored={_original}");
+        Log.Information("Unhooked {Hook}, IAT slot 0x{Slot:x} restored to {Original}", this, _slot, _original);
     }
 
     private unsafe void Write(FARPROC trunk)
