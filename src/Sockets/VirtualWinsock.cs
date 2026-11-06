@@ -32,7 +32,6 @@ internal sealed class VirtualWinsock : IDisposable
     private const nint StatusCancelled = unchecked((int)0xC0000120);
 
     private readonly INetworkAdapter _adapter;
-    private readonly List<IDisposable> _hooks = [];
     private readonly Dictionary<SOCKET, VirtualSocket> _sockets = [];
     private readonly Lock _lock = new();
     private readonly unsafe HostEntry* _host;
@@ -43,34 +42,34 @@ internal sealed class VirtualWinsock : IDisposable
         _adapter = adapter;
         _host = HostEntry.Allocate(adapter.Address);
 
+        List<IDisposable> hooks = [];
+
         try
         {
-            _hooks.Add(HookTarget.Import(Library, nameof(bind)).Replace<bind>(Bind));
-            _hooks.Add(HookTarget.Import(Library, nameof(getsockname)).Replace<getsockname>(GetSockName));
-            _hooks.Add(HookTarget.Import(Library, nameof(closesocket)).Replace<closesocket>(CloseSocket));
-            _hooks.Add(HookTarget.Import(Library, nameof(gethostbyname)).Replace<gethostbyname>(GetHostByName));
-            _hooks.Add(HookTarget.Import(Library, nameof(WSASendTo)).Replace<WSASendTo>(SendTo));
-            _hooks.Add(HookTarget.Import(Library, nameof(WSARecvFrom)).Replace<WSARecvFrom>(RecvFrom));
-            _hooks.Add(HookTarget.Import(Library, nameof(WSAGetOverlappedResult)).Replace<WSAGetOverlappedResult>(GetOverlappedResult));
+            hooks.Add(HookTarget.Import(Library, nameof(bind)).Replace<bind>(Bind));
+            hooks.Add(HookTarget.Import(Library, nameof(getsockname)).Replace<getsockname>(GetSockName));
+            hooks.Add(HookTarget.Import(Library, nameof(closesocket)).Replace<closesocket>(CloseSocket));
+            hooks.Add(HookTarget.Import(Library, nameof(gethostbyname)).Replace<gethostbyname>(GetHostByName));
+            hooks.Add(HookTarget.Import(Library, nameof(WSASendTo)).Replace<WSASendTo>(SendTo));
+            hooks.Add(HookTarget.Import(Library, nameof(WSARecvFrom)).Replace<WSARecvFrom>(RecvFrom));
+            hooks.Add(HookTarget.Import(Library, nameof(WSAGetOverlappedResult)).Replace<WSAGetOverlappedResult>(GetOverlappedResult));
         }
         catch
         {
-            Dispose();
+            foreach (var hook in hooks)
+            {
+                hook.Dispose();
+            }
+
+            adapter.Dispose();
             throw;
         }
 
         Task.Run(ReceiveAsync);
     }
 
-    public void Dispose()
-    {
-        foreach (var hook in _hooks)
-        {
-            hook.Dispose();
-        }
-
-        _adapter.Dispose();
-    }
+    // The hooks stay: the game closes its sockets after this, and CloseSocket completes their pending receives.
+    public void Dispose() => _adapter.Dispose();
 
     private unsafe int Bind(SOCKET s, SOCKADDR* name, int namelen)
     {

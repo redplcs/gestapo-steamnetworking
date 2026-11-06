@@ -1,7 +1,3 @@
-using System.Reflection;
-using System.Runtime.InteropServices;
-using Windows.Win32;
-using Gestapo.SteamNetworking.Hooking;
 using Gestapo.SteamNetworking.Sockets;
 using Gestapo.SteamNetworking.Steam;
 
@@ -9,63 +5,21 @@ namespace Gestapo.SteamNetworking;
 
 internal static class Host
 {
-    private static bool s_started;
     private static VirtualWinsock? s_winsock;
 
     internal static void Start()
     {
-        if (s_started)
-        {
-            return;
-        }
+        Log.Information("The game is ready");
 
-        s_started = true;
-
-        // The game loaded us as dinput8.dll, so a plain "dinput8.dll" would resolve to us, not the real one.
-        NativeLibrary.SetDllImportResolver(
-            typeof(Host).Assembly,
-            static (name, _, _) =>
-                name.Equals("dinput8.dll", StringComparison.OrdinalIgnoreCase)
-                    ? NativeLibrary.Load(Path.Combine(Environment.SystemDirectory, "dinput8.dll"))
-                    : nint.Zero);
-
-        // One file per game launch. Two instances started within the same second share it.
-        Log.Logger = new LoggerConfiguration()
-            .MinimumLevel.Debug()
-            .WriteTo.File(Path.Combine(AppContext.BaseDirectory, $"steamnet-{DateTime.Now:yyyyMMdd-HHmmss}.log"), shared: true)
-            .CreateLogger();
-
-        Log.Information("Starting the mod {Version}", typeof(Host).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion);
-
-        try
-        {
-            HookTarget.Import("kernel32.dll", nameof(ExitProcess)).Replace<ExitProcess>(Stop);
-            s_winsock = new VirtualWinsock(Environment.GetEnvironmentVariable("GESTAPO_TRANSPORT") == "loopback"
-                ? new LoopbackAdapter()
-                : new SteamAdapter());
-        }
-        catch (Exception e)
-        {
-            Log.Fatal(e, "The mod failed to start, the game runs without it");
-        }
+        s_winsock = new VirtualWinsock(Environment.GetEnvironmentVariable("GESTAPO_TRANSPORT") == "loopback"
+            ? new LoopbackAdapter()
+            : new SteamAdapter());
     }
 
-    private static void Stop(uint exitCode)
+    internal static void Stop()
     {
-        Log.Information("The game is exiting with code {ExitCode}", exitCode);
+        Log.Information("The game is shutting down");
 
-        try
-        {
-            s_winsock?.Dispose();
-        }
-        catch (Exception e)
-        {
-            Log.Error(e, "The mod failed to stop");
-        }
-        finally
-        {
-            Log.CloseAndFlush();
-            PInvoke.ExitProcess(exitCode);
-        }
+        s_winsock?.Dispose();
     }
 }

@@ -9,11 +9,6 @@ namespace Gestapo.SteamNetworking.Hooking;
 #pragma warning disable CS8981 // lowercase names come from the exports
 internal static unsafe class NativeDelegates
 {
-    // kernel32.dll
-
-    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
-    internal delegate void ExitProcess(uint uExitCode);
-
     // ws2_32.dll
 
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]

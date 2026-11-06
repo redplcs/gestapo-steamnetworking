@@ -71,7 +71,7 @@ internal sealed unsafe class SteamAdapter : INetworkAdapter
 
     public void Send(IPAddress to, ReadOnlySpan<byte> data)
     {
-        // The game may still send from another thread while ExitProcess disposes us and shuts Steam down.
+        // The game keeps sending after the mod stops, when Steam is already shut down.
         if (_closed)
         {
             return;
