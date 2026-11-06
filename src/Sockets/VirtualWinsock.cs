@@ -45,13 +45,13 @@ internal sealed class VirtualWinsock : IDisposable
 
         try
         {
-            _hooks.Add(new FunctionHook<bind>(Library, nameof(bind), Bind));
-            _hooks.Add(new FunctionHook<getsockname>(Library, nameof(getsockname), GetSockName));
-            _hooks.Add(new FunctionHook<closesocket>(Library, nameof(closesocket), CloseSocket));
-            _hooks.Add(new FunctionHook<gethostbyname>(Library, nameof(gethostbyname), GetHostByName));
-            _hooks.Add(new FunctionHook<WSASendTo>(Library, nameof(WSASendTo), SendTo));
-            _hooks.Add(new FunctionHook<WSARecvFrom>(Library, nameof(WSARecvFrom), RecvFrom));
-            _hooks.Add(new FunctionHook<WSAGetOverlappedResult>(Library, nameof(WSAGetOverlappedResult), GetOverlappedResult));
+            _hooks.Add(HookTarget.Import(Library, nameof(bind)).Replace<bind>(Bind));
+            _hooks.Add(HookTarget.Import(Library, nameof(getsockname)).Replace<getsockname>(GetSockName));
+            _hooks.Add(HookTarget.Import(Library, nameof(closesocket)).Replace<closesocket>(CloseSocket));
+            _hooks.Add(HookTarget.Import(Library, nameof(gethostbyname)).Replace<gethostbyname>(GetHostByName));
+            _hooks.Add(HookTarget.Import(Library, nameof(WSASendTo)).Replace<WSASendTo>(SendTo));
+            _hooks.Add(HookTarget.Import(Library, nameof(WSARecvFrom)).Replace<WSARecvFrom>(RecvFrom));
+            _hooks.Add(HookTarget.Import(Library, nameof(WSAGetOverlappedResult)).Replace<WSAGetOverlappedResult>(GetOverlappedResult));
         }
         catch
         {

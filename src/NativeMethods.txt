@@ -2,6 +2,7 @@
 GetModuleHandle
 GetProcAddress
 VirtualProtect
+VirtualAlloc
 WSABUF
 SOCKADDR_IN
 SOCKET

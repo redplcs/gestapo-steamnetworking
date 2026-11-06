@@ -10,10 +10,6 @@ namespace Gestapo.SteamNetworking;
 internal static class Host
 {
     private static bool s_started;
-
-    // Static: the game calls our hooks through these objects' delegates, GC must not collect them.
-    // ReSharper disable once NotAccessedField.Local
-    private static FunctionHook<ExitProcess>? s_exit;
     private static VirtualWinsock? s_winsock;
 
     internal static void Start()
@@ -43,7 +39,7 @@ internal static class Host
 
         try
         {
-            s_exit = new FunctionHook<ExitProcess>("kernel32.dll", nameof(ExitProcess), Stop);
+            HookTarget.Import("kernel32.dll", nameof(ExitProcess)).Replace<ExitProcess>(Stop);
             s_winsock = new VirtualWinsock(Environment.GetEnvironmentVariable("GESTAPO_TRANSPORT") == "loopback"
                 ? new LoopbackAdapter()
                 : new SteamAdapter());
