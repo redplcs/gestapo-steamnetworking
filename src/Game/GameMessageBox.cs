@@ -14,7 +14,7 @@ internal static class GameMessageBox
     // OK to the last slot button; the bits above are keys and flags.
     private const uint PressableButtons = 0x7FF;
 
-    private static MenuPanel? s_mutedPanel;
+    private static Menu? s_mutedMenu;
     private static bool s_isMouseSwitched;
     private static bool s_isMatchPaused;
     private static (string Text, uint Buttons)? s_coveredDialog;
@@ -70,8 +70,8 @@ internal static class GameMessageBox
     // A panel with the mouse off stops tracking the cursor.
     private static void MuteScreenBelow()
     {
-        s_mutedPanel = GameInstance.Menus.FirstModalMenu?.Panel;
-        s_mutedPanel?.SetMouseEnabled(false);
+        s_mutedMenu = GameInstance.Menus.FirstModalMenu;
+        s_mutedMenu?.Panel?.SetMouseEnabled(false);
     }
 
     // Menus over a match switch the mouse from aiming speed the same way.
@@ -99,8 +99,9 @@ internal static class GameMessageBox
 
     private static void RestoreAfterClose()
     {
-        s_mutedPanel?.SetMouseEnabled(true);
-        s_mutedPanel = null;
+        // Entering a match frees the panels of the screens it leaves, so ask the menu for its panel again.
+        s_mutedMenu?.Panel?.SetMouseEnabled(true);
+        s_mutedMenu = null;
 
         if (s_isMouseSwitched)
         {
