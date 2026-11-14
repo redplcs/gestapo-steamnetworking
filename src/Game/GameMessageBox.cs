@@ -14,6 +14,9 @@ internal static class GameMessageBox
     // OK to the last slot button; the bits above are keys and flags.
     private const uint PressableButtons = 0x7FF;
 
+    // The answer of a box the game closed from code, before any button was pressed.
+    private const int ClosedByGame = -1;
+
     private static Menu? s_mutedMenu;
     private static bool s_isMouseSwitched;
     private static bool s_isMatchPaused;
@@ -41,6 +44,12 @@ internal static class GameMessageBox
         if (s_coveredDialog is { } dialog)
         {
             s_coveredDialog = null;
+
+            // Without our box the game would have closed the dialog the same way.
+            if (GameInstance.MessageBoxAnswer == ClosedByGame)
+            {
+                return;
+            }
 
             // Showing clears the answer our box left, before the dialog's menu updates and reads it.
             GameInstance.ShowMessageBoxWithSameOptions(dialog.Text, dialog.Buttons);
