@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Gestapo.SteamNetworking.Game;
 using Gestapo.SteamNetworking.Hooking;
+using Serilog.Events;
 using Windows.Win32;
 using Windows.Win32.Foundation;
 using Windows.Win32.System.Com;
@@ -40,10 +41,13 @@ internal static unsafe class NativeExports
                     ? NativeLibrary.Load(Path.Combine(Environment.SystemDirectory, "dinput8.dll"))
                     : nint.Zero);
 
+        var messageBox = new MessageBoxSink();
+
         // One file per game launch. Two instances started within the same second share it.
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Debug()
             .WriteTo.File(Path.Combine(AppContext.BaseDirectory, $"steamnet-{DateTime.Now:yyyyMMdd-HHmmss}.log"), shared: true)
+            .WriteTo.Sink(messageBox, LogEventLevel.Error)
             .CreateLogger();
 
         Log.Information("Starting the mod {Version}", typeof(NativeExports).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion);
@@ -52,6 +56,7 @@ internal static unsafe class NativeExports
         {
             GameTargets.CreateEnd.RunBefore(OnGameCreated);
             GameTargets.Destroy.RunBefore(OnGameDestroying);
+            GameTargets.MenuUpdate.RunBefore(_ => messageBox.ShowPending());
         }
         catch (Exception e)
         {
