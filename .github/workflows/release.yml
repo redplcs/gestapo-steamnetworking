@@ -1,0 +1,27 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet publish src -c Release -o publish "-p:Version=$($env:TAG.TrimStart('v'))"
+      - run: |
+          Rename-Item publish/Gestapo.SteamNetworking.dll dinput8.dll
+          Compress-Archive publish/dinput8.dll, publish/steam_api.dll "gestapo-steamnetworking-$env:TAG.zip"
+      # checkout leaves a lightweight tag on the commit, so --notes-from-tag would read the commit message.
+      - run: git fetch --force origin "refs/tags/${env:TAG}:refs/tags/${env:TAG}"
+      - run: gh release create $env:TAG "gestapo-steamnetworking-$env:TAG.zip" --title $env:TAG --notes-from-tag
