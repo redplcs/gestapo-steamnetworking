@@ -1,0 +1,45 @@
+name: Bug report
+description: Something doesn't work with the mod
+labels: [bug]
+body:
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you report
+      description: Most "I can't see the match" problems are one of these.
+      options:
+        - label: Everyone in the match has the mod installed and Steam running
+          required: true
+        - label: All players are friends on Steam
+          required: true
+        - label: Everyone has identical `Juego.cfg`, `JuegoPla.cfg`, `Red.cfg` and `MultiP.cfg` in the game's `Config` folder
+          required: true
+        - label: The host isn't Invisible on Steam
+          required: true
+        - label: If a match was missing, I waited a few seconds and opened the LAN list again
+  - type: input
+    id: version
+    attributes:
+      label: Mod version
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what happened instead. Say who hosted, how many players there were and who had the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: Error message
+      description: The text or a screenshot of the mod's error box in the game, if there was one.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Drag the newest `steamnet-*.log` from the game folder here, from the host and from the player who had the problem. Issues are public and the log contains Steam names and IDs, so remove anything you don't want to share.
+    validations:
+      required: true
